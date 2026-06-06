@@ -77,6 +77,7 @@ export function TranscriptViewer({ segments, pauseMarkers = [] }: TranscriptView
             );
           }
 
+          if (item.kind !== "segment") return null;
           const seg = item.data;
           const c = getSpeakerColor(seg.speakerIndex);
           return (
