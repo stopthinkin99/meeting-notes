@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
+    "@supabase/supabase-js": "^2.107.0",
     "assemblyai": "^4.32.1",
     "clsx": "^2.1.1",
     "groq-sdk": "^1.1.2",
