@@ -73,7 +73,9 @@ export function useRecorder(options: UseRecorderOptions = {}) {
         streamRef.current = stream;
       }
 
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      const mimeType = MediaRecorder.isTypeSupported("audio/mp4")
+        ? "audio/mp4"
+        : MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm")
         ? "audio/webm"
