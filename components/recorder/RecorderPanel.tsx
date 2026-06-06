@@ -9,7 +9,7 @@ import { MeetingMode } from "@/types";
 
 interface RecorderPanelProps {
   mode: MeetingMode;
-  topic: string;
+  topic?: string;
   onStop: (blob: Blob, duration: number, pauseMarkers: PauseMarker[]) => void;
   onStartTime?: (date: string, time: string) => void;
   onStopTime?: (time: string) => void;
@@ -23,12 +23,18 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
     state, duration, audioBlob, error,
     pauseMarkers, uploadedRecording, isUploading,
     start, pause, resume, stop, reset,
-  } = useRecorder({ captureSystemAudio: isVirtual, onStartTime, onStopTime, topic });
+  } = useRecorder({
+    captureSystemAudio: isVirtual,
+    onStartTime,
+    onStopTime,
+    topic,
+  });
 
   useEffect(() => {
     if (state === "stopped" && audioBlob) {
       onStop(audioBlob, duration, pauseMarkers);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, audioBlob]);
 
   const isIdle = state === "idle";
@@ -50,7 +56,7 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
       </SectionLabel>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3 mb-4 text-sm text-red-700">
+        <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3 mb-4 text-sm text-red-700 dark:bg-red-950 dark:border-red-800 dark:text-red-400">
           <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <span>{error}</span>
         </div>
@@ -63,16 +69,25 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
       )}
 
       <div className="flex flex-col items-center gap-5 py-6">
-        {/* Waveform */}
+
+        {/* Waveform animation when recording */}
         {isRecording && (
           <div className="flex items-end gap-1 h-8">
             {[...Array(9)].map((_, i) => (
-              <div key={i} className="w-1 bg-red-500 rounded-full"
-                style={{ animation: `waveBar 0.8s ease-in-out infinite`, animationDelay: `${i * 0.09}s`, height: "4px" }} />
+              <div
+                key={i}
+                className="w-1 bg-red-500 rounded-full"
+                style={{
+                  animation: "waveBar 0.8s ease-in-out infinite",
+                  animationDelay: `${i * 0.09}s`,
+                  height: "4px",
+                }}
+              />
             ))}
           </div>
         )}
 
+        {/* Paused indicator */}
         {isPaused && (
           <div className="text-sm text-amber-600 font-medium bg-amber-50 border border-amber-200 rounded-full px-4 py-1.5">
             ⏸ Meeting paused — press Resume when ready
@@ -89,42 +104,49 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
           {isStopped && <Badge variant="success">Meeting ended</Badge>}
         </div>
 
-        {/* Pause markers summary */}
+        {/* Break count */}
         {(isRecording || isPaused || isStopped) && pauseMarkers.filter(m => m.type === "pause").length > 0 && (
           <p className="text-xs text-gray-400">
             {pauseMarkers.filter(m => m.type === "pause").length} break{pauseMarkers.filter(m => m.type === "pause").length > 1 ? "s" : ""} taken
           </p>
         )}
 
-        {/* Controls */}
+        {/* Buttons */}
         <div className="flex items-center gap-3">
+
+          {/* Start button — only when idle */}
           {isIdle && (
-            <button onClick={start}
+            <button
+              onClick={start}
               className="h-16 w-16 rounded-full bg-gray-900 text-white flex items-center justify-center hover:bg-gray-700 transition-colors active:scale-95 dark:bg-gray-100 dark:text-gray-900"
-              aria-label="Start recording">
+            >
               <Mic className="h-7 w-7" />
             </button>
           )}
 
+          {/* Pause / Resume + End meeting — when recording or paused */}
           {(isRecording || isPaused) && (
             <div className="flex items-center gap-3">
-              {/* Pause / Resume */}
               <button
                 onClick={isRecording ? pause : resume}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-full border-2 border-gray-300 text-gray-700 font-medium text-sm hover:bg-gray-50 transition-colors dark:border-gray-600 dark:text-gray-300"
-                aria-label={isRecording ? "Pause meeting" : "Resume meeting"}>
-                {isRecording ? <><Pause className="h-4 w-4" /> Pause</> : <><Play className="h-4 w-4" /> Resume</>}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-full border-2 border-gray-300 text-gray-700 font-medium text-sm hover:bg-gray-50 transition-colors dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                {isRecording
+                  ? <><Pause className="h-4 w-4" /> Pause</>
+                  : <><Play className="h-4 w-4" /> Resume</>
+                }
               </button>
 
-              {/* Stop — only show if recording or paused */}
-              <button onClick={stop}
+              <button
+                onClick={stop}
                 className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-red-500 text-white font-medium text-sm hover:bg-red-600 transition-colors active:scale-95"
-                aria-label="End meeting">
+              >
                 <Square className="h-4 w-4 fill-white" /> End meeting
               </button>
             </div>
           )}
 
+          {/* Reset after stopped */}
           {isStopped && (
             <Button onClick={reset}>Start new recording</Button>
           )}
@@ -143,15 +165,15 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
               <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-2.5 text-sm text-emerald-700">
                 <Check className="h-4 w-4 flex-shrink-0" />
                 <div>
-                  <p className="font-medium">Recording saved to cloud</p>
-                  <p className="text-xs text-emerald-600 mt-0.5">{uploadedRecording.file_name}</p>
+                  <p className="font-medium">Recording saved to cloud ✓</p>
+                  <p className="text-xs text-emerald-600 mt-0.5 break-all">{uploadedRecording.file_name}</p>
                 </div>
               </div>
             )}
             {!isUploading && !uploadedRecording && (
               <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
                 <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                <span>Cloud save failed — recording only in memory</span>
+                <span>Cloud save failed — check Supabase settings</span>
               </div>
             )}
           </div>
@@ -159,7 +181,8 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
 
         {isIdle && (
           <p className="text-xs text-gray-400 text-center max-w-xs">
-            Use <strong>Pause</strong> for breaks — recording continues seamlessly when you resume. <strong>End meeting</strong> when done.
+            Use <strong>Pause</strong> for breaks — recording continues when you resume.{" "}
+            <strong>End meeting</strong> when done.
           </p>
         )}
       </div>
@@ -176,13 +199,21 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
               Upload audio file
             </Button>
           </div>
-          <input ref={fileInputRef} type="file" accept="audio/*,.mp4,.webm,.ogg,.m4a"
-            className="hidden" onChange={handleFileUpload} />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*,.mp4,.webm,.ogg,.m4a"
+            className="hidden"
+            onChange={handleFileUpload}
+          />
         </div>
       )}
 
       <style jsx>{`
-        @keyframes waveBar { 0%, 100% { height: 4px; } 50% { height: 28px; } }
+        @keyframes waveBar {
+          0%, 100% { height: 4px; }
+          50% { height: 28px; }
+        }
       `}</style>
     </Card>
   );
