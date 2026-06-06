@@ -1,14 +1,20 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import { uploadRecording, SavedRecording } from "@/lib/supabase";
 
 export type RecordingState = "idle" | "recording" | "paused" | "stopped";
 
+export interface PauseMarker {
+  type: "pause" | "resume";
+  time: number;
+}
+
 interface UseRecorderOptions {
-  onChunk?: (blob: Blob) => void;
   captureSystemAudio?: boolean;
   onStartTime?: (date: string, time: string) => void;
   onStopTime?: (time: string) => void;
+  topic?: string;
 }
 
 export function useRecorder(options: UseRecorderOptions = {}) {
@@ -16,48 +22,61 @@ export function useRecorder(options: UseRecorderOptions = {}) {
   const [duration, setDuration] = useState(0);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pauseMarkers, setPauseMarkers] = useState<PauseMarker[]>([]);
+  const [uploadedRecording, setUploadedRecording] = useState<SavedRecording | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const mimeTypeRef = useRef<string>("audio/mp4");
+  const durationRef = useRef<number>(0);
+  const pauseMarkersRef = useRef<PauseMarker[]>([]);
+  // Store options in a ref so callbacks don't go stale
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
-  const startTimer = () => {
+  const startTimer = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
-      setDuration((d) => d + 1);
+      durationRef.current += 1;
+      setDuration(durationRef.current);
     }, 1000);
-  };
+  }, []);
 
-  const stopTimer = () => {
+  const stopTimer = useCallback(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
-  };
+  }, []);
 
   const start = useCallback(async () => {
     setError(null);
     chunksRef.current = [];
+    pauseMarkersRef.current = [];
     setAudioBlob(null);
+    setUploadedRecording(null);
+    setPauseMarkers([]);
     setDuration(0);
-    // Auto-set start time
+    durationRef.current = 0;
+
     const now = new Date();
     const timeStr = now.toTimeString().slice(0, 5);
     const dateStr = now.toISOString().split("T")[0];
-    if (options.onStartTime) options.onStartTime(dateStr, timeStr);
+    optionsRef.current.onStartTime?.(dateStr, timeStr);
 
     try {
       let stream: MediaStream;
 
-      if (options.captureSystemAudio) {
-        // Virtual: capture tab/screen audio
+      if (optionsRef.current.captureSystemAudio) {
         try {
           const displayStream = await navigator.mediaDevices.getDisplayMedia({
             audio: true,
             video: false,
           } as DisplayMediaStreamOptions);
           const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          // Merge mic + system audio tracks
           const ctx = new AudioContext();
           const dest = ctx.createMediaStreamDestination();
           ctx.createMediaStreamSource(displayStream).connect(dest);
@@ -65,14 +84,15 @@ export function useRecorder(options: UseRecorderOptions = {}) {
           stream = dest.stream;
           streamRef.current = displayStream;
         } catch {
-          // Fallback to mic only
           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          streamRef.current = stream;
         }
       } else {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         streamRef.current = stream;
       }
 
+      // Pick best supported mimeType — mp4 first for iOS Safari
       const mimeType = MediaRecorder.isTypeSupported("audio/mp4")
         ? "audio/mp4"
         : MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
@@ -81,47 +101,61 @@ export function useRecorder(options: UseRecorderOptions = {}) {
         ? "audio/webm"
         : "audio/ogg";
 
+      mimeTypeRef.current = mimeType;
+
       const recorder = new MediaRecorder(stream, { mimeType });
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
-          options.onChunk?.(e.data);
-        }
+        if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
-      recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mimeType });
+      recorder.onstop = async () => {
+        const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current });
         setAudioBlob(blob);
         streamRef.current?.getTracks().forEach((t) => t.stop());
+
+        // Upload to Supabase
+        setIsUploading(true);
+        const saved = await uploadRecording(
+          blob,
+          durationRef.current,
+          optionsRef.current.topic || ""
+        );
+        setUploadedRecording(saved);
+        setIsUploading(false);
       };
 
-      recorder.start(1000); // collect chunks every second
+      recorder.start(1000);
       mediaRecorderRef.current = recorder;
       setState("recording");
       startTimer();
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : "Could not access microphone";
+      const msg = err instanceof Error ? err.message : "Could not access microphone";
       setError(msg);
     }
-  }, [options]);
+  }, [startTimer]);
 
   const pause = useCallback(() => {
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.pause();
       setState("paused");
       stopTimer();
+      const marker: PauseMarker = { type: "pause", time: durationRef.current };
+      pauseMarkersRef.current = [...pauseMarkersRef.current, marker];
+      setPauseMarkers([...pauseMarkersRef.current]);
     }
-  }, []);
+  }, [stopTimer]);
 
   const resume = useCallback(() => {
     if (mediaRecorderRef.current?.state === "paused") {
       mediaRecorderRef.current.resume();
       setState("recording");
       startTimer();
+      const marker: PauseMarker = { type: "resume", time: durationRef.current };
+      pauseMarkersRef.current = [...pauseMarkersRef.current, marker];
+      setPauseMarkers([...pauseMarkersRef.current]);
     }
-  }, []);
+  }, [startTimer]);
 
   const stop = useCallback(() => {
     if (
@@ -131,20 +165,43 @@ export function useRecorder(options: UseRecorderOptions = {}) {
       mediaRecorderRef.current.stop();
       setState("stopped");
       stopTimer();
-      // Auto-set end time
       const timeStr = new Date().toTimeString().slice(0, 5);
-      if (options.onStopTime) options.onStopTime(timeStr);
+      optionsRef.current.onStopTime?.(timeStr);
     }
-  }, [options]);
+  }, [stopTimer]);
 
   const reset = useCallback(() => {
-    stop();
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+    stopTimer();
+    streamRef.current?.getTracks().forEach((t) => t.stop());
     setDuration(0);
+    durationRef.current = 0;
     setAudioBlob(null);
+    setUploadedRecording(null);
+    pauseMarkersRef.current = [];
+    setPauseMarkers([]);
     setError(null);
     setState("idle");
     chunksRef.current = [];
-  }, [stop]);
+  }, [stopTimer]);
 
-  return { state, duration, audioBlob, error, start, pause, resume, stop, reset };
+  return {
+    state,
+    duration,
+    audioBlob,
+    error,
+    pauseMarkers,
+    uploadedRecording,
+    isUploading,
+    start,
+    pause,
+    resume,
+    stop,
+    reset,
+  };
 }
