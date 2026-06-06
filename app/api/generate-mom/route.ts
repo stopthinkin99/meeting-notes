@@ -8,7 +8,7 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { transcript, meta, attendeeNames }: {
+    const { transcript, segments, meta, attendeeNames }: {
       transcript: string;
       segments: TranscriptSegment[];
       meta: MeetingMeta;
@@ -25,10 +25,16 @@ export async function POST(req: NextRequest) {
     }
 
     const client = new Groq({ apiKey: groqKey });
-    const prompt = buildPrompt(transcript, meta, attendeeNames);
+
+    // Step 1: Clean the raw transcript text the same way we clean segments
+    // This ensures the summary uses corrected terms, not Whisper mishearings
+    const cleanedTranscript = await cleanTranscriptText(transcript, client);
+
+    // Step 2: Generate MoM from the cleaned transcript
+    const prompt = buildPrompt(cleanedTranscript, meta, attendeeNames);
 
     const completion = await client.chat.completions.create({
-      model: "llama-3.3-70b-versatile", // free, very capable
+      model: "llama-3.3-70b-versatile",
       max_tokens: 4096,
       temperature: 0.3,
       messages: [
@@ -42,7 +48,6 @@ export async function POST(req: NextRequest) {
 
     const responseText = completion.choices[0]?.message?.content || "";
 
-    // Parse JSON from response
     let parsed;
     try {
       const jsonMatch = responseText.match(/```json\n?([\s\S]*?)\n?```/);
@@ -83,6 +88,33 @@ export async function POST(req: NextRequest) {
   }
 }
 
+async function cleanTranscriptText(rawText: string, groqClient: Groq): Promise<string> {
+  try {
+    const completion = await groqClient.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      temperature: 0,
+      max_tokens: 2048,
+      messages: [
+        {
+          role: "system",
+          content: `You are a transcript proofreader. Fix ONLY speech-to-text errors — misheared words, wrong proper nouns, technical terms transcribed incorrectly.
+DO NOT rephrase, summarize, or change anything that sounds correct.
+Fix things like: technical terms, AI/tech jargon, product names, company names, acronyms misheared as random words.
+Return ONLY the corrected transcript text, nothing else. Keep the same structure and speaker labels.`,
+        },
+        {
+          role: "user",
+          content: `Fix any speech-to-text errors in this transcript:\n\n${rawText}`,
+        },
+      ],
+    });
+
+    return completion.choices[0]?.message?.content?.trim() || rawText;
+  } catch {
+    return rawText; // fall back to original if cleaning fails
+  }
+}
+
 function buildPrompt(transcript: string, meta: MeetingMeta, attendeeNames: string[]): string {
   return `Analyze this meeting transcript and extract structured minutes of meeting (MoM).
 
@@ -97,12 +129,12 @@ ${transcript}
 Return ONLY this JSON structure, nothing else:
 
 {
-  "summary": "3-5 sentence executive summary of the meeting covering key themes and outcomes.",
+  "summary": "3-5 sentence executive summary of the meeting covering key themes and outcomes. Use the correct proper nouns and technical terms as they appear in the transcript.",
   "momRows": [
     {
-      "pointsDiscussed": "Clear description of the point. Start with a topic label like 'AI Research:' followed by details.",
+      "pointsDiscussed": "Clear description of the point. Start with a topic label like 'Agentic AI Overview:' followed by details.",
       "contactPerson": "Name(s) from the attendee list responsible for this point",
-      "dependency": "What this depends on, or 'No Dependency on GATI ERP' etc.",
+      "dependency": "What this depends on, or 'No Dependency'",
       "priority": "High or Medium or Low",
       "status": "Open or In Progress or Done"
     }
@@ -120,6 +152,6 @@ Rules:
 - Extract ALL distinct discussion points as separate momRows entries
 - Be specific and detailed in pointsDiscussed
 - contactPerson must be names from the attendee list
-- Find all action items even if not explicitly called out as such
-- Return ONLY the JSON object, no extra text before or after`;
+- Find all action items even if not explicitly called out
+- Return ONLY the JSON object, no extra text`;
 }
