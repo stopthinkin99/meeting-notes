@@ -11,19 +11,17 @@ interface TranscriptViewerProps {
   pauseMarkers?: PauseMarker[];
 }
 
+type SegmentItem = { kind: "segment"; data: TranscriptSegment };
+type MarkerItem = { kind: "pause" | "resume"; time: number };
+type Item = SegmentItem | MarkerItem;
+
 export function TranscriptViewer({ segments, pauseMarkers = [] }: TranscriptViewerProps) {
   if (segments.length === 0) return null;
 
-  // Build unique speaker list for legend
   const speakerMap = new Map<string, number>();
   segments.forEach((s) => {
     if (!speakerMap.has(s.speaker)) speakerMap.set(s.speaker, s.speakerIndex);
   });
-
-  // Build a merged list of segments + pause markers sorted by time
-  type SegmentItem = { kind: "segment"; data: TranscriptSegment };
-  type MarkerItem = { kind: "pause" | "resume"; time: number };
-  type Item = SegmentItem | MarkerItem;
 
   const items: Item[] = [
     ...segments.map((s): SegmentItem => ({ kind: "segment", data: s })),
@@ -77,8 +75,8 @@ export function TranscriptViewer({ segments, pauseMarkers = [] }: TranscriptView
             );
           }
 
-          if (item.kind !== "segment") return null;
-          const seg = item.data;
+          // item.kind === "segment" — TypeScript now knows item is SegmentItem
+          const seg = (item as SegmentItem).data;
           const c = getSpeakerColor(seg.speakerIndex);
           return (
             <div key={seg.id} className="flex gap-3">
