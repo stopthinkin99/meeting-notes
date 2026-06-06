@@ -11,9 +11,7 @@ import { MoMTable } from "@/components/mom/MoMTable";
 import { ActionItems } from "@/components/mom/ActionItems";
 import { SavedRecordingsPanel } from "@/components/mom/SavedRecordingsPanel";
 import { Button, Card, SectionLabel } from "@/components/ui";
-import {
-  Mic, Monitor, FileText, Download, Copy, Loader2, AlertCircle,
-} from "lucide-react";
+import { Mic, Monitor, FileText, Download, Copy, Loader2, AlertCircle } from "lucide-react";
 import { cn, exportMoMAsText } from "@/lib/utils";
 
 type AppTab = "inperson" | "virtual" | "minutes";
@@ -33,16 +31,20 @@ export default function Home() {
     else if (tab === "virtual") setMode("virtual");
   };
 
-  const handleRecordingStop = async (
-    blob: Blob,
-    duration: number,
-    markers: PauseMarker[]
-  ) => {
+  const handleRecordingStop = async (blob: Blob, duration: number, markers: PauseMarker[]) => {
     setPauseMarkers(markers);
     const attendeeNames = meeting.meta.attendees.map((a) => a.name).filter(Boolean);
-    await meeting.generateMoM(blob, attendeeNames, markers);
+    await meeting.generateMoM(blob, attendeeNames);
     setHasMoM(true);
     setActiveTab("minutes");
+  };
+
+  // Called from SavedRecordingsPanel — no pause markers available
+  const handleGenerateFromSaved = async (blob: Blob, duration: number) => {
+    setPauseMarkers([]);
+    const attendeeNames = meeting.meta.attendees.map((a) => a.name).filter(Boolean);
+    await meeting.generateMoM(blob, attendeeNames);
+    setHasMoM(true);
   };
 
   const handleExport = () => {
@@ -71,52 +73,8 @@ export default function Home() {
     { id: "minutes" as AppTab, label: "Minutes", icon: FileText, badge: hasMoM },
   ];
 
-  const RecorderSection = ({ currentMode }: { currentMode: MeetingMode }) => (
-    <div className="space-y-4">
-      <MeetingMetaForm
-        meta={meeting.meta}
-        mode={currentMode}
-        onUpdateMeta={meeting.updateMeta}
-        onAddAttendee={meeting.addAttendee}
-        onUpdateAttendee={meeting.updateAttendee}
-        onRemoveAttendee={meeting.removeAttendee}
-      />
-      <RecorderPanel
-        mode={currentMode}
-        topic={meeting.meta.topic}
-        onStop={handleRecordingStop}
-        onStartTime={(date, time) => meeting.updateMeta({ date, timeStart: time })}
-        onStopTime={(time) => meeting.updateMeta({ timeEnd: time })}
-      />
-      {meeting.isGenerating && (
-        <Card>
-          <div className="flex items-center gap-3 py-4">
-            <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
-            <div>
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Generating minutes...
-              </p>
-              <p className="text-xs text-gray-400 mt-0.5">
-                Transcribing audio, detecting speakers, structuring your MoM
-              </p>
-            </div>
-          </div>
-        </Card>
-      )}
-      {meeting.generateError && (
-        <Card>
-          <div className="flex items-start gap-2 text-red-600">
-            <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-            <p className="text-sm">{meeting.generateError}</p>
-          </div>
-        </Card>
-      )}
-    </div>
-  );
-
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
-      {/* Header */}
       <header className="sticky top-0 z-10 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
         <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -141,7 +99,6 @@ export default function Home() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-6">
-        {/* Tabs */}
         <div className="flex gap-1 mb-6 bg-gray-100 dark:bg-gray-800/60 rounded-xl p-1">
           {tabs.map(({ id, label, icon: Icon, badge }) => (
             <button
@@ -162,126 +119,101 @@ export default function Home() {
         </div>
 
         {/* In-person tab */}
-        {activeTab === "inperson" && <RecorderSection currentMode="inperson" />}
+        {activeTab === "inperson" && (
+          <div className="space-y-4">
+            <MeetingMetaForm meta={meeting.meta} mode="inperson" onUpdateMeta={meeting.updateMeta} onAddAttendee={meeting.addAttendee} onUpdateAttendee={meeting.updateAttendee} onRemoveAttendee={meeting.removeAttendee} />
+            <RecorderPanel
+              mode="inperson"
+              topic={meeting.meta.topic}
+              onStop={handleRecordingStop}
+              onStartTime={(date, time) => meeting.updateMeta({ date, timeStart: time })}
+              onStopTime={(time) => meeting.updateMeta({ timeEnd: time })}
+            />
+            {meeting.isGenerating && (
+              <Card><div className="flex items-center gap-3 py-4"><Loader2 className="h-5 w-5 animate-spin text-gray-400" /><div><p className="text-sm font-medium text-gray-700 dark:text-gray-300">Generating minutes...</p><p className="text-xs text-gray-400 mt-0.5">Transcribing audio, detecting speakers, structuring your MoM</p></div></div></Card>
+            )}
+            {meeting.generateError && (
+              <Card><div className="flex items-start gap-2 text-red-600"><AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" /><p className="text-sm">{meeting.generateError}</p></div></Card>
+            )}
+          </div>
+        )}
 
         {/* Virtual tab */}
-        {activeTab === "virtual" && <RecorderSection currentMode="virtual" />}
+        {activeTab === "virtual" && (
+          <div className="space-y-4">
+            <MeetingMetaForm meta={meeting.meta} mode="virtual" onUpdateMeta={meeting.updateMeta} onAddAttendee={meeting.addAttendee} onUpdateAttendee={meeting.updateAttendee} onRemoveAttendee={meeting.removeAttendee} />
+            <RecorderPanel
+              mode="virtual"
+              topic={meeting.meta.topic}
+              onStop={handleRecordingStop}
+              onStartTime={(date, time) => meeting.updateMeta({ date, timeStart: time })}
+              onStopTime={(time) => meeting.updateMeta({ timeEnd: time })}
+            />
+            {meeting.isGenerating && (
+              <Card><div className="flex items-center gap-3 py-4"><Loader2 className="h-5 w-5 animate-spin text-gray-400" /><div><p className="text-sm font-medium">Generating minutes...</p><p className="text-xs text-gray-400 mt-0.5">Processing audio, identifying speakers, structuring your MoM</p></div></div></Card>
+            )}
+          </div>
+        )}
 
         {/* Minutes tab */}
         {activeTab === "minutes" && (
           <div className="space-y-6">
-            {/* Always show saved recordings panel at the top */}
-            <SavedRecordingsPanel
-              onGenerate={(blob, dur) => handleRecordingStop(blob, dur, [])}
-              isGenerating={meeting.isGenerating}
-            />
 
-            {meeting.isGenerating && (
-              <Card>
-                <div className="flex items-center gap-3 py-6">
-                  <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
-                  <div>
-                    <p className="text-sm font-medium">Generating your minutes...</p>
-                    <p className="text-xs text-gray-400 mt-0.5">This takes about 15–30 seconds</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {meeting.generateError && (
-              <Card>
-                <div className="flex items-start gap-2 text-red-600">
-                  <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <p className="text-sm">{meeting.generateError}</p>
-                </div>
-              </Card>
-            )}
-
-            {hasMoM && !meeting.isGenerating && (
+            {/* Generated MoM content */}
+            {meeting.isGenerating ? (
+              <Card><div className="flex items-center gap-3 py-6"><Loader2 className="h-5 w-5 animate-spin text-gray-400" /><div><p className="text-sm font-medium">Generating your minutes...</p><p className="text-xs text-gray-400 mt-0.5">This takes about 15–30 seconds</p></div></div></Card>
+            ) : hasMoM ? (
               <>
                 {/* Meeting overview */}
                 <Card>
                   <SectionLabel>Meeting overview</SectionLabel>
                   <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm mb-4">
-                    {meeting.meta.topic && (
-                      <div className="col-span-2">
-                        <span className="text-gray-400 text-xs">Topic</span>
-                        <p className="font-medium text-gray-900 dark:text-gray-100">{meeting.meta.topic}</p>
-                      </div>
-                    )}
-                    {meeting.meta.date && (
-                      <div>
-                        <span className="text-gray-400 text-xs">Date</span>
-                        <p className="text-gray-700 dark:text-gray-300">{meeting.meta.date}</p>
-                      </div>
-                    )}
-                    {(meeting.meta.timeStart || meeting.meta.timeEnd) && (
-                      <div>
-                        <span className="text-gray-400 text-xs">Time</span>
-                        <p className="text-gray-700 dark:text-gray-300">
-                          {meeting.meta.timeStart}{meeting.meta.timeEnd ? ` – ${meeting.meta.timeEnd}` : ""}
-                        </p>
-                      </div>
-                    )}
-                    {meeting.meta.venue && (
-                      <div>
-                        <span className="text-gray-400 text-xs">Venue</span>
-                        <p className="text-gray-700 dark:text-gray-300">{meeting.meta.venue}</p>
-                      </div>
-                    )}
+                    {meeting.meta.topic && <div className="col-span-2"><span className="text-gray-400 text-xs">Topic</span><p className="font-medium text-gray-900 dark:text-gray-100">{meeting.meta.topic}</p></div>}
+                    {meeting.meta.date && <div><span className="text-gray-400 text-xs">Date</span><p className="text-gray-700 dark:text-gray-300">{meeting.meta.date}</p></div>}
+                    {(meeting.meta.timeStart || meeting.meta.timeEnd) && <div><span className="text-gray-400 text-xs">Time</span><p className="text-gray-700 dark:text-gray-300">{meeting.meta.timeStart}{meeting.meta.timeEnd ? ` – ${meeting.meta.timeEnd}` : ""}</p></div>}
+                    {meeting.meta.venue && <div><span className="text-gray-400 text-xs">Venue</span><p className="text-gray-700 dark:text-gray-300">{meeting.meta.venue}</p></div>}
                   </div>
                   {meeting.meta.attendees.length > 0 && (
-                    <div>
-                      <span className="text-gray-400 text-xs">Attendees</span>
+                    <div><span className="text-gray-400 text-xs">Attendees</span>
                       <div className="flex flex-wrap gap-1.5 mt-1">
                         {meeting.meta.attendees.map((a) => (
-                          <span key={a.id} className="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-gray-800 px-2.5 py-0.5 text-xs text-gray-700 dark:text-gray-300">
-                            {a.name}{a.role ? ` · ${a.role}` : ""}
-                          </span>
+                          <span key={a.id} className="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-gray-800 px-2.5 py-0.5 text-xs text-gray-700 dark:text-gray-300">{a.name}{a.role ? ` · ${a.role}` : ""}</span>
                         ))}
                       </div>
                     </div>
                   )}
                 </Card>
 
-                {/* Summary */}
                 {meeting.summary && (
-                  <Card>
-                    <SectionLabel>Summary</SectionLabel>
-                    <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
-                      {meeting.summary}
-                    </p>
-                  </Card>
+                  <Card><SectionLabel>Summary</SectionLabel><p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{meeting.summary}</p></Card>
                 )}
 
-                {/* Transcript with pause markers */}
-                <TranscriptViewer
-                  segments={meeting.transcript}
-                  pauseMarkers={pauseMarkers}
-                />
+                <TranscriptViewer segments={meeting.transcript} pauseMarkers={pauseMarkers} />
 
-                {/* MoM Table */}
-                <Card>
-                  <MoMTable
-                    rows={meeting.momRows}
-                    onUpdate={meeting.updateMomRow}
-                    onDelete={meeting.deleteMomRow}
-                    onMove={meeting.moveMomRow}
-                    onAdd={meeting.addMomRow}
-                  />
-                </Card>
+                <Card><MoMTable rows={meeting.momRows} onUpdate={meeting.updateMomRow} onDelete={meeting.deleteMomRow} onMove={meeting.moveMomRow} onAdd={meeting.addMomRow} /></Card>
 
-                {/* Action items */}
-                <Card>
-                  <ActionItems
-                    items={meeting.actionItems}
-                    onUpdate={meeting.updateActionItem}
-                    onDelete={meeting.deleteActionItem}
-                    onAdd={meeting.addActionItem}
-                  />
-                </Card>
+                <Card><ActionItems items={meeting.actionItems} onUpdate={meeting.updateActionItem} onDelete={meeting.deleteActionItem} onAdd={meeting.addActionItem} /></Card>
               </>
+            ) : (
+              <Card>
+                <div className="py-8 text-center">
+                  <FileText className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">No minutes yet</p>
+                  <p className="text-xs text-gray-400 mb-4">Record a meeting or generate from a saved recording below.</p>
+                  <Button onClick={() => setActiveTab("inperson")}>Start a recording</Button>
+                </div>
+              </Card>
             )}
+
+            {meeting.generateError && (
+              <Card><div className="flex items-start gap-2 text-red-600"><AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" /><p className="text-sm">{meeting.generateError}</p></div></Card>
+            )}
+
+            {/* Saved recordings — always shown at bottom of Minutes tab */}
+            <SavedRecordingsPanel
+              onGenerate={handleGenerateFromSaved}
+              isGenerating={meeting.isGenerating}
+            />
           </div>
         )}
       </main>

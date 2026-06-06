@@ -11,10 +11,6 @@ interface TranscriptViewerProps {
   pauseMarkers?: PauseMarker[];
 }
 
-type SegmentItem = { kind: "segment"; data: TranscriptSegment };
-type MarkerItem = { kind: "pause" | "resume"; time: number };
-type Item = SegmentItem | MarkerItem;
-
 export function TranscriptViewer({ segments, pauseMarkers = [] }: TranscriptViewerProps) {
   if (segments.length === 0) return null;
 
@@ -23,14 +19,33 @@ export function TranscriptViewer({ segments, pauseMarkers = [] }: TranscriptView
     if (!speakerMap.has(s.speaker)) speakerMap.set(s.speaker, s.speakerIndex);
   });
 
-  const items: Item[] = [
-    ...segments.map((s): SegmentItem => ({ kind: "segment", data: s })),
-    ...pauseMarkers.map((m): MarkerItem => ({ kind: m.type, time: m.time })),
-  ].sort((a, b) => {
-    const timeA = a.kind === "segment" ? a.data.startTime : a.time;
-    const timeB = b.kind === "segment" ? b.data.startTime : b.time;
-    return timeA - timeB;
-  });
+  // Merge segments and pause markers into one sorted list
+  type Item =
+    | { kind: "segment"; data: TranscriptSegment }
+    | { kind: "pause" | "resume"; time: number };
+
+  // Total recording duration from last segment
+const totalDuration = segments.length > 0
+  ? segments[segments.length - 1].endTime
+  : 0;
+
+// Total recording duration from recorder (wall clock seconds)
+const maxMarkerTime = pauseMarkers.length > 0
+  ? Math.max(...pauseMarkers.map(m => m.time))
+  : 1;
+
+const items: Item[] = [
+  ...segments.map((s): Item => ({ kind: "segment", data: s })),
+  ...pauseMarkers.map((m): Item => ({
+    kind: m.type,
+    // Scale marker time (wall clock) to transcript time
+    time: (m.time / maxMarkerTime) * totalDuration,
+  })),
+].sort((a, b) => {
+  const timeA = a.kind === "segment" ? a.data.startTime : a.time;
+  const timeB = b.kind === "segment" ? b.data.startTime : b.time;
+  return timeA - timeB;
+});
 
   return (
     <Card>
@@ -55,7 +70,7 @@ export function TranscriptViewer({ segments, pauseMarkers = [] }: TranscriptView
             return (
               <div key={`pause-${idx}`} className="flex items-center gap-3 py-1">
                 <div className="flex-1 h-px bg-amber-200 dark:bg-amber-800" />
-                <span className="text-xs font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 dark:bg-amber-950 dark:border-amber-800">
+                <span className="text-xs font-medium text-amber-600 whitespace-nowrap px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200">
                   ⏸ Meeting Paused
                 </span>
                 <div className="flex-1 h-px bg-amber-200 dark:bg-amber-800" />
@@ -67,7 +82,7 @@ export function TranscriptViewer({ segments, pauseMarkers = [] }: TranscriptView
             return (
               <div key={`resume-${idx}`} className="flex items-center gap-3 py-1">
                 <div className="flex-1 h-px bg-emerald-200 dark:bg-emerald-800" />
-                <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 whitespace-nowrap px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 dark:bg-emerald-950 dark:border-emerald-800">
+                <span className="text-xs font-medium text-emerald-600 whitespace-nowrap px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200">
                   ▶ Meeting Resumed
                 </span>
                 <div className="flex-1 h-px bg-emerald-200 dark:bg-emerald-800" />
@@ -75,8 +90,8 @@ export function TranscriptViewer({ segments, pauseMarkers = [] }: TranscriptView
             );
           }
 
-          // item.kind === "segment" — TypeScript now knows item is SegmentItem
-          const seg = (item as SegmentItem).data;
+          // segment — cast to access .data safely
+          const seg = (item as { kind: "segment"; data: TranscriptSegment }).data;
           const c = getSpeakerColor(seg.speakerIndex);
           return (
             <div key={seg.id} className="flex gap-3">

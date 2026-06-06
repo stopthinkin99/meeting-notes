@@ -10,7 +10,6 @@ import {
   Attendee,
 } from "@/types";
 import { generateId } from "@/lib/utils";
-import { PauseMarker } from "@/hooks/useRecorder";
 
 const defaultMeta: MeetingMeta = {
   topic: "",
@@ -55,14 +54,19 @@ export function useMeeting() {
     }));
   }, []);
 
-  // Generate MoM from audio blob
+  // Transcript
+  const setTranscriptData = useCallback((segs: TranscriptSegment[]) => {
+    setTranscript(segs);
+  }, []);
+
+  // Generate MoM from transcript via API
   const generateMoM = useCallback(
-    async (audioBlob: Blob, attendeeNames: string[], pauseMarkers: PauseMarker[] = []) => {
+    async (audioBlob: Blob, attendeeNames: string[]) => {
       setIsGenerating(true);
       setGenerateError(null);
 
       try {
-        // Step 1: Transcribe
+        // Step 1: transcribe audio
         const formData = new FormData();
         formData.append("audio", audioBlob, "recording.webm");
         formData.append("attendees", JSON.stringify(attendeeNames));
@@ -80,7 +84,7 @@ export function useMeeting() {
         const { segments, rawText } = await transcribeRes.json();
         setTranscript(segments);
 
-        // Step 2: Generate MoM
+        // Step 2: generate MoM from transcript
         const momRes = await fetch("/api/generate-mom", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -89,7 +93,6 @@ export function useMeeting() {
             segments,
             meta,
             attendeeNames,
-            pauseMarkers,
           }),
         });
 
@@ -98,7 +101,9 @@ export function useMeeting() {
           throw new Error(err.error || "MoM generation failed");
         }
 
-        const { summary: s, momRows: rows, actionItems: actions } = await momRes.json();
+        const { summary: s, momRows: rows, actionItems: actions } =
+          await momRes.json();
+
         setSummary(s);
         setMomRows(rows);
         setActionItems(actions);
@@ -163,11 +168,14 @@ export function useMeeting() {
     setActionItems((a) => [...a, item]);
   }, []);
 
-  const updateActionItem = useCallback((id: string, patch: Partial<ActionItem>) => {
-    setActionItems((items) =>
-      items.map((a) => (a.id === id ? { ...a, ...patch } : a))
-    );
-  }, []);
+  const updateActionItem = useCallback(
+    (id: string, patch: Partial<ActionItem>) => {
+      setActionItems((items) =>
+        items.map((a) => (a.id === id ? { ...a, ...patch } : a))
+      );
+    },
+    []
+  );
 
   const deleteActionItem = useCallback((id: string) => {
     setActionItems((items) => items.filter((a) => a.id !== id));
@@ -198,6 +206,7 @@ export function useMeeting() {
     addAttendee,
     updateAttendee,
     removeAttendee,
+    setTranscriptData,
     generateMoM,
     addMomRow,
     updateMomRow,
