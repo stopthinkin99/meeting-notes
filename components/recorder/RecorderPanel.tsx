@@ -1,33 +1,29 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Mic, Square, Pause, Play, AlertCircle, Upload, CloudUpload, Check } from "lucide-react";
-import { useRecorder, PauseMarker } from "@/hooks/useRecorder";
+import { Mic, Square, Pause, Play, AlertCircle, Upload, Check, Download } from "lucide-react";
+import { useRecorder } from "@/hooks/useRecorder";
 import { Button, Badge, Card, SectionLabel } from "@/components/ui";
 import { formatDuration } from "@/lib/utils";
 import { MeetingMode } from "@/types";
 
 interface RecorderPanelProps {
   mode: MeetingMode;
-  topic?: string;
-  onStop: (blob: Blob, duration: number, pauseMarkers: PauseMarker[]) => void;
+  onStop: (blob: Blob, duration: number) => void;
   onStartTime?: (date: string, time: string) => void;
   onStopTime?: (time: string) => void;
 }
 
-export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: RecorderPanelProps) {
+export function RecorderPanel({ mode, onStop, onStartTime, onStopTime }: RecorderPanelProps) {
   const isVirtual = mode === "virtual";
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const {
-    state, duration, audioBlob, error,
-    pauseMarkers, isUploading, uploadedFileName, uploadError,
-    start, pause, resume, stop, reset,
-  } = useRecorder({ captureSystemAudio: isVirtual, onStartTime, onStopTime, topic });
+  const { state, duration, audioBlob, error, pauseMarkers, savedFileName, start, pause, resume, stop, reset } =
+    useRecorder({ captureSystemAudio: isVirtual, onStartTime, onStopTime });
 
   useEffect(() => {
     if (state === "stopped" && audioBlob) {
-      onStop(audioBlob, duration, pauseMarkers);
+      onStop(audioBlob, duration);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, audioBlob]);
@@ -40,18 +36,16 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    onStop(file, 0, []);
+    onStop(file, 0);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   return (
     <Card>
-      <SectionLabel>
-        {isVirtual ? "System audio capture" : "Microphone recording"}
-      </SectionLabel>
+      <SectionLabel>{isVirtual ? "System audio capture" : "Microphone recording"}</SectionLabel>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3 mb-4 text-sm text-red-700 dark:bg-red-950 dark:border-red-800 dark:text-red-400">
+        <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3 mb-4 text-sm text-red-700">
           <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <span>{error}</span>
         </div>
@@ -59,12 +53,11 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
 
       {isVirtual && isIdle && (
         <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 mb-4 text-sm text-blue-700">
-          <strong>How it works:</strong> Click start, then share your screen or tab with audio when prompted.
+          <strong>Virtual mode:</strong> Click start, then share your screen or tab with audio when prompted.
         </div>
       )}
 
       <div className="flex flex-col items-center gap-5 py-6">
-
         {/* Waveform */}
         {isRecording && (
           <div className="flex items-end gap-1 h-8">
@@ -92,13 +85,13 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
         </div>
 
         {/* Break count */}
-        {(isRecording || isPaused || isStopped) && pauseMarkers.filter(m => m.type === "pause").length > 0 && (
+        {pauseMarkers.filter(m => m.type === "pause").length > 0 && (isRecording || isPaused || isStopped) && (
           <p className="text-xs text-gray-400">
             {pauseMarkers.filter(m => m.type === "pause").length} break{pauseMarkers.filter(m => m.type === "pause").length > 1 ? "s" : ""} taken
           </p>
         )}
 
-        {/* Buttons */}
+        {/* Controls */}
         <div className="flex items-center gap-3">
           {isIdle && (
             <button onClick={start}
@@ -111,7 +104,7 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
           {(isRecording || isPaused) && (
             <div className="flex items-center gap-3">
               <button onClick={isRecording ? pause : resume}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-full border-2 border-gray-300 text-gray-700 font-medium text-sm hover:bg-gray-50 transition-colors dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800">
+                className="flex items-center gap-2 px-5 py-2.5 rounded-full border-2 border-gray-300 text-gray-700 font-medium text-sm hover:bg-gray-50 transition-colors">
                 {isRecording ? <><Pause className="h-4 w-4" /> Pause</> : <><Play className="h-4 w-4" /> Resume</>}
               </button>
               <button onClick={stop}
@@ -124,44 +117,27 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
           {isStopped && (
             <div className="flex gap-3">
               <Button onClick={reset}>Record again</Button>
-              <Button variant="primary" onClick={() => audioBlob && onStop(audioBlob, duration, pauseMarkers)}>
-                Regenerate minutes →
+              <Button variant="primary" onClick={() => audioBlob && onStop(audioBlob, duration)}>
+                Regenerate →
               </Button>
             </div>
           )}
         </div>
 
-        {/* Cloud upload status */}
-        {isStopped && (
-          <div className="w-full max-w-sm space-y-2">
-            {isUploading && (
-              <div className="flex items-center gap-2 rounded-lg bg-blue-50 border border-blue-200 px-4 py-2.5 text-sm text-blue-700">
-                <CloudUpload className="h-4 w-4 animate-pulse flex-shrink-0" />
-                <span>Saving recording to cloud...</span>
-              </div>
-            )}
-            {!isUploading && uploadedFileName && (
-              <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-2.5 text-sm text-emerald-700">
-                <Check className="h-4 w-4 flex-shrink-0" />
-                <div>
-                  <p className="font-medium">Saved to cloud ✓</p>
-                  <p className="text-xs text-emerald-600 mt-0.5 break-all">{uploadedFileName}</p>
-                </div>
-              </div>
-            )}
-            {!isUploading && uploadError && (
-              <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
-                <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                <span>Cloud save failed: {uploadError}</span>
-              </div>
-            )}
+        {/* Saved file confirmation */}
+        {isStopped && savedFileName && (
+          <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-2.5 text-sm text-emerald-700 w-full max-w-sm">
+            <Check className="h-4 w-4 flex-shrink-0" />
+            <div>
+              <p className="font-medium">Saved to Downloads</p>
+              <p className="text-xs text-emerald-600 mt-0.5 break-all">{savedFileName}</p>
+            </div>
           </div>
         )}
 
         {isIdle && (
           <p className="text-xs text-gray-400 text-center max-w-xs">
-            Use <strong>Pause</strong> for breaks — recording continues when you resume.{" "}
-            <strong>End meeting</strong> when done. Recording saves to cloud automatically.
+            Use <strong>Pause</strong> for breaks. <strong>End meeting</strong> when done — audio auto-saves to your Downloads as backup.
           </p>
         )}
       </div>
@@ -169,17 +145,13 @@ export function RecorderPanel({ mode, topic, onStop, onStartTime, onStopTime }: 
       {/* Upload saved file */}
       {isIdle && (
         <div className="border-t border-gray-100 dark:border-gray-800 pt-4 mt-2">
-          <p className="text-xs text-gray-400 text-center mb-3">
-            Have a saved recording? Upload it to generate minutes
-          </p>
+          <p className="text-xs text-gray-400 text-center mb-3">Have a saved recording? Upload to generate minutes</p>
           <div className="flex justify-center">
             <Button size="sm" onClick={() => fileInputRef.current?.click()}>
-              <Upload className="h-3.5 w-3.5" />
-              Upload audio file
+              <Upload className="h-3.5 w-3.5" /> Upload audio file
             </Button>
           </div>
-          <input ref={fileInputRef} type="file" accept="audio/*,.mp4,.webm,.ogg,.m4a"
-            className="hidden" onChange={handleFileUpload} />
+          <input ref={fileInputRef} type="file" accept="audio/*,.mp4,.webm,.ogg,.m4a" className="hidden" onChange={handleFileUpload} />
         </div>
       )}
 

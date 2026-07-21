@@ -1,20 +1,18 @@
 export type MeetingMode = "inperson" | "virtual";
 
-export type Platform = "googlemeet" | "zoom" | "teams" | "other";
-
 export interface Attendee {
   id: string;
   name: string;
   role: string;
 }
 
-export interface TranscriptSegment {
-  id: string;
-  speaker: string;
-  speakerIndex: number;
-  text: string;
-  startTime: number; // seconds
-  endTime: number;
+export interface MeetingMeta {
+  topic: string;
+  venue: string;
+  date: string;
+  timeStart: string;
+  timeEnd: string;
+  attendees: Attendee[];
 }
 
 export interface MoMRow {
@@ -35,33 +33,10 @@ export interface ActionItem {
   done: boolean;
 }
 
-export interface MeetingMeta {
-  topic: string;
-  venue: string;
-  date: string;
-  timeStart: string;
-  timeEnd: string;
-  platform?: Platform;
-  attendees: Attendee[];
-}
-
-export interface MeetingData {
+export interface MeetingResult {
   meta: MeetingMeta;
-  transcript: TranscriptSegment[];
   summary: string;
   momRows: MoMRow[];
   actionItems: ActionItem[];
-  mode: MeetingMode;
-  recordingDuration: number;
-}
-
-export interface TranscribeResponse {
-  segments: TranscriptSegment[];
-  rawText: string;
-}
-
-export interface GenerateMoMResponse {
-  summary: string;
-  momRows: MoMRow[];
-  actionItems: ActionItem[];
+  generatedAt: string;
 }

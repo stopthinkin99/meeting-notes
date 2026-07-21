@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import { downloadAudioFile } from "@/lib/utils";
 
 export type RecordingState = "idle" | "recording" | "paused" | "stopped";
 
@@ -10,11 +11,9 @@ export interface PauseMarker {
 }
 
 interface UseRecorderOptions {
-  onChunk?: (blob: Blob) => void;
   captureSystemAudio?: boolean;
   onStartTime?: (date: string, time: string) => void;
   onStopTime?: (time: string) => void;
-  topic?: string;
 }
 
 export function useRecorder(options: UseRecorderOptions = {}) {
@@ -23,9 +22,7 @@ export function useRecorder(options: UseRecorderOptions = {}) {
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pauseMarkers, setPauseMarkers] = useState<PauseMarker[]>([]);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [savedFileName, setSavedFileName] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -34,6 +31,8 @@ export function useRecorder(options: UseRecorderOptions = {}) {
   const mimeTypeRef = useRef<string>("audio/mp4");
   const durationRef = useRef(0);
   const pauseMarkersRef = useRef<PauseMarker[]>([]);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   const startTimer = () => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -50,73 +49,29 @@ export function useRecorder(options: UseRecorderOptions = {}) {
     }
   };
 
-  const uploadToSupabase = async (blob: Blob, mimeType: string) => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseKey) {
-      setUploadError("Supabase keys not configured");
-      return;
-    }
-
-    setIsUploading(true);
-    setUploadError(null);
-
-    try {
-      const ext = mimeType.includes("mp4") ? "mp4" : mimeType.includes("webm") ? "webm" : "ogg";
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const fileName = `meeting-${timestamp}.${ext}`;
-
-      const uploadUrl = `${supabaseUrl}/storage/v1/object/meeting-recordings/${fileName}`;
-
-      const res = await fetch(uploadUrl, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${supabaseKey}`,
-          "Content-Type": mimeType,
-          "x-upsert": "false",
-        },
-        body: blob,
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Upload failed: ${errText}`);
-      }
-
-      setUploadedFileName(fileName);
-    } catch (err) {
-      console.error("Supabase upload error:", err);
-      setUploadError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
   const start = useCallback(async () => {
     setError(null);
     chunksRef.current = [];
     pauseMarkersRef.current = [];
     setAudioBlob(null);
-    setUploadedFileName(null);
-    setUploadError(null);
+    setSavedFileName(null);
     setPauseMarkers([]);
     setDuration(0);
     durationRef.current = 0;
 
     const now = new Date();
-    const timeStr = now.toTimeString().slice(0, 5);
-    const dateStr = now.toISOString().split("T")[0];
-    if (options.onStartTime) options.onStartTime(dateStr, timeStr);
+    optionsRef.current.onStartTime?.(
+      now.toISOString().split("T")[0],
+      now.toTimeString().slice(0, 5)
+    );
 
     try {
       let stream: MediaStream;
 
-      if (options.captureSystemAudio) {
+      if (optionsRef.current.captureSystemAudio) {
         try {
           const displayStream = await navigator.mediaDevices.getDisplayMedia({
-            audio: true,
-            video: false,
+            audio: true, video: false,
           } as DisplayMediaStreamOptions);
           const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
           const ctx = new AudioContext();
@@ -143,22 +98,19 @@ export function useRecorder(options: UseRecorderOptions = {}) {
         : "audio/ogg";
 
       mimeTypeRef.current = mimeType;
-
       const recorder = new MediaRecorder(stream, { mimeType });
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
-          options.onChunk?.(e.data);
-        }
+        if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
-      recorder.onstop = async () => {
+      recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current });
         setAudioBlob(blob);
         streamRef.current?.getTracks().forEach((t) => t.stop());
-        // Upload to Supabase only — no local download
-        await uploadToSupabase(blob, mimeTypeRef.current);
+        // Auto-download to device immediately as backup
+        const fileName = downloadAudioFile(blob, mimeTypeRef.current);
+        setSavedFileName(fileName);
       };
 
       recorder.start(1000);
@@ -166,10 +118,9 @@ export function useRecorder(options: UseRecorderOptions = {}) {
       setState("recording");
       startTimer();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Could not access microphone";
-      setError(msg);
+      setError(err instanceof Error ? err.message : "Could not access microphone");
     }
-  }, [options]);
+  }, []);
 
   const pause = useCallback(() => {
     if (mediaRecorderRef.current?.state === "recording") {
@@ -198,28 +149,30 @@ export function useRecorder(options: UseRecorderOptions = {}) {
       mediaRecorderRef.current.stop();
       setState("stopped");
       stopTimer();
-      const timeStr = new Date().toTimeString().slice(0, 5);
-      if (options.onStopTime) options.onStopTime(timeStr);
+      optionsRef.current.onStopTime?.(new Date().toTimeString().slice(0, 5));
     }
-  }, [options]);
+  }, []);
 
   const reset = useCallback(() => {
-    stop();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    stopTimer();
+    streamRef.current?.getTracks().forEach((t) => t.stop());
     setDuration(0);
     durationRef.current = 0;
     setAudioBlob(null);
-    setUploadedFileName(null);
-    setUploadError(null);
+    setSavedFileName(null);
     pauseMarkersRef.current = [];
     setPauseMarkers([]);
     setError(null);
     setState("idle");
     chunksRef.current = [];
-  }, [stop]);
+  }, []);
 
   return {
     state, duration, audioBlob, error,
-    pauseMarkers, isUploading, uploadedFileName, uploadError,
+    pauseMarkers, savedFileName,
     start, pause, resume, stop, reset,
   };
 }
