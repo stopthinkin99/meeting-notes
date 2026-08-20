@@ -82,19 +82,17 @@ Rules:
 
     let parsed;
     try {
-      // Strip any markdown if present
-      const withoutThinking = responseText.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-      const cleaned = withoutThinking.replace(/```json\n?|\n?```/g, "").trim();
-      parsed = JSON.parse(cleaned);
-    } catch {
-      // Try to extract JSON
-      const start = responseText.indexOf("{");
-      const end = responseText.lastIndexOf("}");
-      if (start !== -1 && end !== -1) {
-        parsed = JSON.parse(responseText.slice(start, end + 1));
-      } else {
-        throw new Error("Could not parse response as JSON");
-      }
+      // Strip thinking tokens, markdown, and anything outside the JSON object
+      const withoutThinking = responseText.replace(/<think>[\s\S]*?<\/think>/g, "");
+      const start = withoutThinking.indexOf("{");
+      const end = withoutThinking.lastIndexOf("}");
+      if (start === -1 || end === -1) throw new Error("No JSON object found");
+      const jsonStr = withoutThinking.slice(start, end + 1);
+      parsed = JSON.parse(jsonStr);
+    } catch (parseErr) {
+      console.error("Parse error:", parseErr);
+      console.error("Raw response:", responseText.slice(0, 500));
+      throw new Error("Could not parse model response as JSON");
     }
 
     const momRows: MoMRow[] = (parsed.momRows || []).map((r: Partial<MoMRow>, i: number) => ({
