@@ -83,7 +83,8 @@ Rules:
     let parsed;
     try {
       // Strip any markdown if present
-      const cleaned = responseText.replace(/```json\n?|\n?```/g, "").trim();
+      const withoutThinking = responseText.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+      const cleaned = withoutThinking.replace(/```json\n?|\n?```/g, "").trim();
       parsed = JSON.parse(cleaned);
     } catch {
       // Try to extract JSON
