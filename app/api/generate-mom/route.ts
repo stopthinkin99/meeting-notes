@@ -66,7 +66,7 @@ Rules:
 - Return ONLY the JSON, nothing else before or after`;
 
     const completion = await client.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+      model: "qwen/qwen3.6-27b",
       max_tokens: 4096,
       temperature: 0.2,
       messages: [
