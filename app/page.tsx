@@ -123,23 +123,7 @@ export default function Home() {
      * New recordings won't normally hit this because
      * they're already segmented every ~3 minutes.
      */
-    if (
-      audioFiles.length === 1 &&
-      audioFiles[0].size >
-        20 * 1024 * 1024
-    ) {
-      throw new Error(
-        `This saved recording is ${(
-          audioFiles[0].size /
-          1024 /
-          1024
-        ).toFixed(
-          1
-        )} MB and is too large to upload as one file. ` +
-          "New meetings are now automatically split into safe transcription segments. " +
-          "For this older recording, it must first be converted or divided into valid audio files."
-      );
-    }
+    
 
     const transcriptParts: string[] =
       [];
@@ -163,15 +147,15 @@ export default function Home() {
         new FormData();
 
       const extension =
-        audioPart.type.includes(
-          "mp4"
-        )
+        audioPart.type.includes("wav")
+          ? "wav"
+          : audioPart.type.includes("mp4")
           ? "mp4"
-          : audioPart.type.includes(
-              "ogg"
-            )
+          : audioPart.type.includes("ogg")
           ? "ogg"
-          : "webm";
+          : audioPart.type.includes("webm")
+          : "webm"
+          : "audio";
 
       formData.append(
         "audio",
