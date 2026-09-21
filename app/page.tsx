@@ -54,55 +54,257 @@ export default function Home() {
     setMeta(m => ({ ...m, attendees: m.attendees.filter(a => a.id !== id) }));
   }, []);
 
-  const handleRecordingStop = async (blob: Blob, duration: number) => {
-    setIsGenerating(true);
-    setGenerateError(null);
+  const handleRecordingStop = async (
+  blob: Blob,
+  duration: number,
+  transcriptionBlobs?: Blob[]
+) => {
+  setIsGenerating(true);
+  setGenerateError(null);
+
+  try {
+    /*
+     * Fresh recordings now arrive with valid
+     * transcription segments.
+     *
+     * Uploaded historical recordings will only
+     * contain the original blob.
+     */
+    const audioFiles =
+      transcriptionBlobs &&
+      transcriptionBlobs.length > 0
+        ? transcriptionBlobs
+        : [blob];
+
+    /*
+     * Historical uploads cannot safely be byte-split.
+     *
+     * New recordings won't normally hit this because
+     * they're already segmented every ~3 minutes.
+     */
+    if (
+      audioFiles.length === 1 &&
+      audioFiles[0].size >
+        20 * 1024 * 1024
+    ) {
+      throw new Error(
+        `This saved recording is ${(
+          audioFiles[0].size /
+          1024 /
+          1024
+        ).toFixed(
+          1
+        )} MB and is too large to upload as one file. ` +
+          "New meetings are now automatically split into safe transcription segments. " +
+          "For this older recording, it must first be converted or divided into valid audio files."
+      );
+    }
+
+    const transcriptParts: string[] =
+      [];
+
+    /*
+     * Transcribe sequentially so that:
+     *
+     * - meeting order is preserved
+     * - Groq isn't flooded with requests
+     * - large meetings remain stable
+     */
+    for (
+      let index = 0;
+      index < audioFiles.length;
+      index++
+    ) {
+      const audioPart =
+        audioFiles[index];
+
+      const formData =
+        new FormData();
+
+      const extension =
+        audioPart.type.includes(
+          "mp4"
+        )
+          ? "mp4"
+          : audioPart.type.includes(
+              "ogg"
+            )
+          ? "ogg"
+          : "webm";
+
+      formData.append(
+        "audio",
+        audioPart,
+        `recording-part-${
+          index + 1
+        }.${extension}`
+      );
+
+      const transcribeRes =
+        await fetch(
+          "/api/transcribe",
+          {
+            method: "POST",
+            body: formData,
+          }
+        );
+
+      /*
+       * Do not blindly call .json().
+       *
+       * If a proxy/server sends plain text such as
+       * "Request Entity Too Large", we now show that
+       * actual error instead of:
+       *
+       * Unexpected token 'R'...
+       */
+      const responseText =
+        await transcribeRes.text();
+
+      let responseData:
+        | {
+            text?: string;
+            error?: string;
+          }
+        | null = null;
+
+      try {
+        responseData =
+          responseText
+            ? JSON.parse(
+                responseText
+              )
+            : null;
+      } catch {
+        responseData = null;
+      }
+
+      if (!transcribeRes.ok) {
+        throw new Error(
+          responseData?.error ||
+            responseText ||
+            `Transcription part ${
+              index + 1
+            } failed with HTTP ${
+              transcribeRes.status
+            }.`
+        );
+      }
+
+      const partText =
+        responseData?.text?.trim();
+
+      if (partText) {
+        transcriptParts.push(
+          partText
+        );
+      }
+    }
+
+    const text =
+      transcriptParts.join("\n\n");
+
+    if (!text.trim()) {
+      throw new Error(
+        "No speech detected. Please try recording again."
+      );
+    }
+
+    // Generate final Minutes of Meeting
+    const momRes = await fetch(
+      "/api/generate-mom",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
+        body: JSON.stringify({
+          transcript: text,
+          meta,
+        }),
+      }
+    );
+
+    /*
+     * Apply the same safe JSON handling here.
+     */
+    const momResponseText =
+      await momRes.text();
+
+    let momData:
+      | {
+          summary?: string;
+          momRows?: MoMRow[];
+          actionItems?: ActionItem[];
+          error?: string;
+        }
+      | null = null;
 
     try {
-      // Step 1: Transcribe + translate to English
-      const formData = new FormData();
-      formData.append("audio", blob, "recording.mp4");
-
-      const transcribeRes = await fetch("/api/transcribe", { method: "POST", body: formData });
-      if (!transcribeRes.ok) {
-        const err = await transcribeRes.json();
-        throw new Error(err.error || "Transcription failed");
-      }
-      const { text } = await transcribeRes.json();
-
-      if (!text?.trim()) throw new Error("No speech detected. Please try recording again.");
-
-      // Step 2: Generate MoM
-      const momRes = await fetch("/api/generate-mom", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: text, meta }),
-      });
-      if (!momRes.ok) {
-        const err = await momRes.json();
-        throw new Error(err.error || "MoM generation failed");
-      }
-      const { summary: s, momRows: rows, actionItems: actions } = await momRes.json();
-
-      setSummary(s);
-      setMomRows(rows);
-      setActionItems(actions);
-      setHasMoM(true);
-      setActiveTab("minutes");
-
-      // Save to localStorage history
-      const result: MeetingResult = {
-        meta, summary: s, momRows: rows, actionItems: actions,
-        generatedAt: new Date().toISOString(),
-      };
-      saveMoMToLocal(result);
-      setHistory(loadMoMHistory());
-    } catch (err) {
-      setGenerateError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setIsGenerating(false);
+      momData =
+        momResponseText
+          ? JSON.parse(
+              momResponseText
+            )
+          : null;
+    } catch {
+      momData = null;
     }
-  };
+
+    if (!momRes.ok) {
+      throw new Error(
+        momData?.error ||
+          momResponseText ||
+          "MoM generation failed"
+      );
+    }
+
+    if (!momData) {
+      throw new Error(
+        "MoM generation returned an invalid response."
+      );
+    }
+
+    const s =
+      momData.summary || "";
+
+    const rows =
+      momData.momRows || [];
+
+    const actions =
+      momData.actionItems || [];
+
+    setSummary(s);
+    setMomRows(rows);
+    setActionItems(actions);
+
+    setHasMoM(true);
+    setActiveTab("minutes");
+
+    const result: MeetingResult = {
+      meta,
+      summary: s,
+      momRows: rows,
+      actionItems: actions,
+      generatedAt:
+        new Date().toISOString(),
+    };
+
+    saveMoMToLocal(result);
+    setHistory(
+      loadMoMHistory()
+    );
+  } catch (err) {
+    setGenerateError(
+      err instanceof Error
+        ? err.message
+        : "Unknown error"
+    );
+  } finally {
+    setIsGenerating(false);
+  }
+};
 
   // MoM CRUD
   const addMomRow = () => {
