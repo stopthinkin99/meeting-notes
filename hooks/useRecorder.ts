@@ -17,7 +17,7 @@ interface UseRecorderOptions {
 }
 
 // 3 minutes keeps each transcription upload comfortably small.
-const TRANSCRIPTION_SEGMENT_SECONDS = 180;
+const TRANSCRIPTION_SEGMENT_SECONDS = 60;
 
 export function useRecorder(options: UseRecorderOptions = {}) {
   const [state, setState] = useState<RecordingState>("idle");
