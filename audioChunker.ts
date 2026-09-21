@@ -1,4 +1,4 @@
-const CHUNK_SECONDS = 180; // 3 minutes
+const CHUNK_SECONDS = 60; // 1 minute
 const TARGET_SAMPLE_RATE = 16000;
 
 /**
