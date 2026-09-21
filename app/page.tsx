@@ -6,6 +6,7 @@ import { MeetingForm } from "@/components/recorder/MeetingForm";
 import { RecorderPanel } from "@/components/recorder/RecorderPanel";
 import { MoMTable } from "@/components/mom/MoMTable";
 import { ActionItems } from "@/components/mom/ActionItems";
+import { chunkSavedRecording } from "../audioChunker";
 import { Button, Card, SectionLabel } from "@/components/ui";
 import {
   Mic, Monitor, FileText, Download, Copy,
@@ -70,11 +71,51 @@ export default function Home() {
      * Uploaded historical recordings will only
      * contain the original blob.
      */
-    const audioFiles =
+    let audioFiles: Blob[];
+
+    if (
       transcriptionBlobs &&
       transcriptionBlobs.length > 0
-        ? transcriptionBlobs
-        : [blob];
+    ) {
+      /*
+       * New recording.
+       * Already segmented while recording.
+       */
+      audioFiles = transcriptionBlobs;
+    } else if (
+      blob.size >
+      20 * 1024 * 1024
+    ) {
+      /*
+       * Existing / uploaded large recording.
+       *
+       * Decode it locally in the browser and turn it
+       * into real 3-minute WAV files BEFORE uploading.
+       */
+      console.log(
+        `Large saved recording: ${(
+          blob.size /
+          1024 /
+          1024
+        ).toFixed(1)} MB`
+      );
+    
+      console.log(
+        "Preparing transcription segments..."
+      );
+    
+      audioFiles =
+        await chunkSavedRecording(blob);
+    
+      console.log(
+        `Prepared ${audioFiles.length} valid audio segments.`
+      );
+    } else {
+      /*
+       * Small uploaded recording can go directly.
+       */
+      audioFiles = [blob];
+    }
 
     /*
      * Historical uploads cannot safely be byte-split.
