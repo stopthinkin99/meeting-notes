@@ -154,7 +154,7 @@ export default function Home() {
           : audioPart.type.includes("ogg")
           ? "ogg"
           : audioPart.type.includes("webm")
-          : "webm"
+          ? "webm"
           : "audio";
 
       formData.append(
