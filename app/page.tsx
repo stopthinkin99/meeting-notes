@@ -235,6 +235,16 @@ export default function Home() {
       );
     }
 
+    localStorage.setItem(
+      "meetingmind_last_transcript",
+      text
+    );
+
+    localStorage.setItem(
+      "meetingmind_last_transcript_saved_at",
+      new.Date().toISOString()
+    );
+
     // Generate final Minutes of Meeting
     const momRes = await fetch(
       "/api/generate-mom",
@@ -254,6 +264,49 @@ export default function Home() {
     /*
      * Apply the same safe JSON handling here.
      */
+
+    const generateMomFromTranscript = async (text: string) => {
+      const momRes = await fetch(
+        "/api/generate-mom",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            transcript: text,
+            meta,
+          }),
+        }
+      );
+    
+      const responseText =
+        await momRes.text();
+    
+      let data;
+    
+      try {
+        data = JSON.parse(
+          responseText
+        );
+      } catch {
+        throw new Error(
+          responseText ||
+            "Invalid MoM response"
+        );
+      }
+    
+      if (!momRes.ok) {
+        throw new Error(
+          data?.error ||
+            "MoM generation failed"
+        );
+      }
+    
+      return data;
+    };
+    
     const momResponseText =
       await momRes.text();
 
