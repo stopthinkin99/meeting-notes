@@ -242,7 +242,7 @@ export default function Home() {
 
     localStorage.setItem(
       "meetingmind_last_transcript_saved_at",
-      new.Date().toISOString()
+      new Date().toISOString()
     );
 
     // Generate final Minutes of Meeting
