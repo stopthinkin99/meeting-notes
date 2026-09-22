@@ -67,14 +67,19 @@ Rules:
 
     const completion = await client.chat.completions.create({
       model: "qwen/qwen3.8-27b",
-      max_tokens: 4096,
+      max_completion_tokens: 900,
+      reasoning_effort: "none",
+      include_reasonong: false,
       temperature: 0.2,
+      response_format: {
+        type: "json_object",
+      },
+      
       messages: [
         {
-          role: "system",
-          content: "You are a meeting analyst. Always respond with valid JSON only. No markdown, no explanation, just the JSON object.",
+          role: "user",
+          content: prompt,
         },
-        { role: "user", content: prompt },
       ],
     });
 
