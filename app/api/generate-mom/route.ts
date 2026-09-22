@@ -69,7 +69,7 @@ Rules:
       model: "qwen/qwen3.8-27b",
       max_completion_tokens: 900,
       reasoning_effort: "none",
-      include_reasonong: false,
+      include_reasoning: false,
       temperature: 0.2,
       response_format: {
         type: "json_object",
