@@ -1,372 +1,421 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
-import { MeetingMeta, MoMRow, ActionItem } from "@/types";
-import { generateId } from "@/lib/utils";
 
-export const maxDuration = 120;
+export const maxDuration = 60;
 
 const MODEL = "qwen/qwen3.8-27b";
 
-// Keep each transcript chunk comfortably under your 7000 ITPM limit.
-// ~4 chars/token is a rough estimate, so 12,000 chars is usually ~3,000 tokens.
-const TRANSCRIPT_CHUNK_CHARS = 12000;
-
-interface ExtractedChunk {
-  discussionPoints: Array<{
-    pointsDiscussed: string;
-    contactPerson: string;
-    dependency: string;
-    priority: "High" | "Medium" | "Low";
-    status: "Open" | "In Progress" | "Done";
-  }>;
-  actionItems: Array<{
-    task: string;
-    owner: string;
-    dueDate: string;
-  }>;
-}
-
-export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
-
-    const {
-      transcript,
-      meta,
-    }: {
-      transcript: string;
-      meta: MeetingMeta;
-    } = body;
-
-    if (!transcript?.trim()) {
-      return NextResponse.json(
-        { error: "No transcript provided" },
-        { status: 400 }
-      );
-    }
-
-    const groqKey = process.env.GROQ_API_KEY;
-
-    if (!groqKey) {
-      return NextResponse.json(
-        { error: "GROQ_API_KEY not configured" },
-        { status: 500 }
-      );
-    }
-
-    const client = new Groq({
-      apiKey: groqKey,
-    });
-
-    const attendeeList =
-      meta.attendees
-        .map((a) => a.name)
-        .filter(Boolean)
-        .join(", ") || "Not specified";
-
-    const transcriptChunks =
-      splitTranscript(
-        transcript,
-        TRANSCRIPT_CHUNK_CHARS
-      );
-
-    console.log(
-      `Generating MoM from ${transcriptChunks.length} transcript chunks`
+function getErrorStatus(err: unknown): number {
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "status" in err
+  ) {
+    const candidate = Number(
+      (err as { status?: unknown }).status
     );
 
-    const extractedChunks: ExtractedChunk[] = [];
+    if (
+      Number.isInteger(candidate) &&
+      candidate >= 400 &&
+      candidate <= 599
+    ) {
+      return candidate;
+    }
+  }
+
+  const message =
+    err instanceof Error
+      ? err.message
+      : "";
+
+  if (
+    /rate.?limit|rate_limit_exceeded/i.test(
+      message
+    )
+  ) {
+    return 429;
+  }
+
+  return 500;
+}
+
+function parseModelJson(
+  responseText: string
+) {
+  try {
+    return JSON.parse(
+      responseText
+    );
+  } catch {
+    const cleaned =
+      responseText.replace(
+        /<think>[\s\S]*?<\/think>/g,
+        ""
+      );
+
+    const start =
+      cleaned.indexOf("{");
+
+    const end =
+      cleaned.lastIndexOf("}");
+
+    if (
+      start === -1 ||
+      end === -1
+    ) {
+      throw new Error(
+        "No valid JSON object found in model response."
+      );
+    }
+
+    return JSON.parse(
+      cleaned.slice(
+        start,
+        end + 1
+      )
+    );
+  }
+}
+
+export async function POST(
+  req: NextRequest
+) {
+  try {
+    const body =
+      await req.json();
+
+    const apiKey =
+      process.env.GROQ_API_KEY;
+
+    if (!apiKey) {
+      return NextResponse.json(
+        {
+          error:
+            "GROQ_API_KEY not configured",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    const groq =
+      new Groq({
+        apiKey,
+      });
 
     /*
-     * STEP 1
-     * Process each transcript section separately.
+     * MODE 1:
+     * Analyze ONE transcript chunk.
      */
-    for (
-      let i = 0;
-      i < transcriptChunks.length;
-      i++
+    if (
+      body.mode ===
+      "analyze"
     ) {
-      const chunk = transcriptChunks[i];
+      const {
+        transcriptChunk,
+        chunkNumber,
+        totalChunks,
+        meta,
+      } = body;
 
-      const extractionPrompt = `
+      if (
+        !transcriptChunk?.trim()
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "No transcript chunk provided",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
+      const attendees =
+        meta?.attendees
+          ?.map(
+            (
+              a: {
+                name?: string;
+              }
+            ) =>
+              a.name
+          )
+          .filter(
+            Boolean
+          )
+          .join(
+            ", "
+          ) ||
+        "Not specified";
+
+      const prompt = `
 You are an expert meeting analyst.
 
-Analyze ONLY this section of a larger meeting transcript.
+You are analyzing SECTION ${chunkNumber} OF ${totalChunks} from a larger meeting.
 
 Meeting Details:
-- Topic: ${meta.topic || "Not specified"}
-- Date: ${meta.date || "Not specified"}
-- Time: ${meta.timeStart || ""}${
-        meta.timeEnd
+Topic: ${meta?.topic || "Not specified"}
+Date: ${meta?.date || "Not specified"}
+Time: ${meta?.timeStart || ""}${
+        meta?.timeEnd
           ? ` to ${meta.timeEnd}`
           : ""
       }
-- Venue: ${meta.venue || "Not specified"}
-- Attendees: ${attendeeList}
+Venue: ${meta?.venue || "Not specified"}
+Attendees: ${attendees}
 
-TRANSCRIPT SECTION ${i + 1} OF ${transcriptChunks.length}:
-${chunk}
+TRANSCRIPT SECTION:
 
-Extract every meaningful discussion point, decision, responsibility, dependency, and action item present in THIS section.
+${transcriptChunk}
 
-Return ONLY valid JSON with this exact structure:
+Extract ALL materially important information from this section.
+
+Return ONLY valid JSON using exactly this structure:
 
 {
   "discussionPoints": [
     {
-      "pointsDiscussed": "Clear description of what was discussed or decided",
-      "contactPerson": "Responsible person, or empty string",
-      "dependency": "Dependency or 'No Dependency'",
-      "priority": "High",
+      "pointsDiscussed": "Clear and specific description of what was discussed, decided, requested, clarified, or agreed",
+      "contactPerson": "Responsible person if identifiable, otherwise empty string",
+      "dependency": "Dependency if mentioned, otherwise No Dependency",
+      "priority": "Medium",
       "status": "Open"
     }
   ],
   "actionItems": [
     {
       "task": "Specific action required",
-      "owner": "Responsible person, or empty string",
-      "dueDate": "Date/timeframe mentioned, or 'TBD'"
+      "owner": "Responsible person if identifiable, otherwise empty string",
+      "dueDate": "Specific date/timeframe if mentioned, otherwise TBD"
     }
   ]
 }
 
 Rules:
-- Preserve all important details.
-- Do not summarize away distinct discussion points.
-- Do not invent names, deadlines, or decisions.
+- Preserve distinct discussion points separately.
+- Preserve important decisions.
+- Preserve responsibilities.
+- Preserve follow-ups.
+- Preserve process changes and requirements.
+- Preserve dependencies.
+- Do not invent facts.
+- Do not invent owners.
+- Do not invent deadlines.
 - priority must be exactly High, Medium, or Low.
 - status must be exactly Open, In Progress, or Done.
-- If no contact person is known, use an empty string.
+- If there are no action items, return an empty actionItems array.
 - Return JSON only.
 `;
 
       const completion =
-        await client.chat.completions.create({
+        await groq.chat.completions.create({
           model: MODEL,
           max_completion_tokens: 850,
-          reasoning_effort: "none",
-          include_reasoning: false,
+          reasoning_effort:
+            "none",
+          include_reasoning:
+            false,
           temperature: 0.1,
           response_format: {
-            type: "json_object",
+            type:
+              "json_object",
           },
           messages: [
             {
-              role: "user",
-              content: extractionPrompt,
+              role:
+                "user",
+              content:
+                prompt,
             },
           ],
         });
 
       const responseText =
-        completion.choices[0]?.message
-          ?.content || "";
+        completion
+          .choices[0]
+          ?.message
+          ?.content ||
+        "";
 
       const parsed =
-        parseJsonResponse<ExtractedChunk>(
+        parseModelJson(
           responseText
         );
 
-      extractedChunks.push({
-        discussionPoints:
-          parsed.discussionPoints || [],
-        actionItems:
-          parsed.actionItems || [],
-      });
+      return NextResponse.json(
+        {
+          discussionPoints:
+            parsed.discussionPoints ||
+            [],
 
-      /*
-       * Your current Groq tier has per-minute limits.
-       * A pause between calls prevents back-to-back
-       * requests from immediately hitting the limit.
-       */
-      if (
-        i <
-        transcriptChunks.length - 1
-      ) {
-        await sleep(65000);
-      }
+          actionItems:
+            parsed.actionItems ||
+            [],
+        }
+      );
     }
 
     /*
-     * STEP 2
-     * Merge everything locally first.
-     *
-     * This ensures we never throw away content from
-     * earlier transcript sections.
+     * MODE 2:
+     * Finalize the MOM summary from
+     * already-extracted points.
      */
-    const allDiscussionPoints =
-      extractedChunks.flatMap(
-        (chunk) =>
-          chunk.discussionPoints
-      );
+    if (
+      body.mode ===
+      "finalize"
+    ) {
+      const {
+        discussionPoints,
+        actionItems,
+        meta,
+      } = body;
 
-    const allActionItems =
-      extractedChunks.flatMap(
-        (chunk) => chunk.actionItems
-      );
+      const attendees =
+        meta?.attendees
+          ?.map(
+            (
+              a: {
+                name?: string;
+              }
+            ) =>
+              a.name
+          )
+          .filter(
+            Boolean
+          )
+          .join(
+            ", "
+          ) ||
+        "Not specified";
 
-    /*
-     * STEP 3
-     * Ask the AI to create the executive summary
-     * and clean duplicate points only.
-     *
-     * Notice: we are NOT sending the original
-     * hour-long transcript again.
-     */
-    const mergeInput = {
-      discussionPoints:
-        allDiscussionPoints,
-      actionItems: allActionItems,
-    };
+      const compactPoints =
+        (
+          discussionPoints ||
+          []
+        ).map(
+          (
+            point: {
+              pointsDiscussed?: string;
+            },
+            index: number
+          ) =>
+            `${index + 1}. ${
+              point.pointsDiscussed ||
+              ""
+            }`
+        );
 
-    // Wait before final Groq call because of current rate limits.
-    await sleep(65000);
+      const compactActions =
+        (
+          actionItems ||
+          []
+        ).map(
+          (
+            action: {
+              task?: string;
+              owner?: string;
+            },
+            index: number
+          ) =>
+            `${index + 1}. ${
+              action.task ||
+              ""
+            }${
+              action.owner
+                ? ` — ${action.owner}`
+                : ""
+            }`
+        );
 
-    const mergePrompt = `
-You are finalizing Minutes of Meeting from already-extracted meeting notes.
+      const prompt = `
+Create a concise executive summary for these Minutes of Meeting.
 
-Meeting Details:
-- Topic: ${meta.topic || "Not specified"}
-- Date: ${meta.date || "Not specified"}
-- Time: ${meta.timeStart || ""}${
-      meta.timeEnd
-        ? ` to ${meta.timeEnd}`
-        : ""
-    }
-- Venue: ${meta.venue || "Not specified"}
-- Attendees: ${attendeeList}
+Meeting:
+Topic: ${meta?.topic || "Not specified"}
+Date: ${meta?.date || "Not specified"}
+Venue: ${meta?.venue || "Not specified"}
+Attendees: ${attendees}
 
-EXTRACTED MEETING DATA:
-${JSON.stringify(mergeInput)}
+DISCUSSION POINTS:
+${compactPoints.join("\n")}
 
-Create the final structured Minutes of Meeting.
+ACTION ITEMS:
+${compactActions.join("\n")}
 
-Return ONLY this JSON:
+Return ONLY JSON:
 
 {
-  "summary": "A clear 3-5 sentence executive summary.",
-  "momRows": [
-    {
-      "pointsDiscussed": "Specific discussion point",
-      "contactPerson": "Responsible person or empty string",
-      "dependency": "Dependency or 'No Dependency'",
-      "priority": "High",
-      "status": "Open"
-    }
-  ],
-  "actionItems": [
-    {
-      "task": "Specific action",
-      "owner": "Responsible person or empty string",
-      "dueDate": "Date/timeframe or 'TBD'"
-    }
-  ]
+  "summary": "A clear 3-5 sentence executive summary covering the main subjects discussed, important decisions, responsibilities, and overall outcome."
 }
 
 Rules:
-- Preserve all materially distinct discussion points.
-- Merge only true duplicates.
-- Do not remove important decisions, responsibilities, or actions.
 - Do not invent information.
-- priority must be High, Medium, or Low.
-- status must be Open, In Progress, or Done.
+- Keep it concise but meaningful.
+- Mention major decisions where present.
+- Mention significant follow-up work where present.
 - Return JSON only.
 `;
 
-    const finalCompletion =
-      await client.chat.completions.create({
-        model: MODEL,
-        max_completion_tokens: 900,
-        reasoning_effort: "none",
-        include_reasoning: false,
-        temperature: 0.1,
-        response_format: {
-          type: "json_object",
-        },
-        messages: [
-          {
-            role: "user",
-            content: mergePrompt,
+      const completion =
+        await groq.chat.completions.create({
+          model: MODEL,
+          max_completion_tokens: 450,
+          reasoning_effort:
+            "none",
+          include_reasoning:
+            false,
+          temperature: 0.1,
+          response_format: {
+            type:
+              "json_object",
           },
-        ],
-      });
+          messages: [
+            {
+              role:
+                "user",
+              content:
+                prompt,
+            },
+          ],
+        });
 
-    const finalText =
-      finalCompletion.choices[0]
-        ?.message?.content || "";
+      const responseText =
+        completion
+          .choices[0]
+          ?.message
+          ?.content ||
+        "";
 
-    const parsed =
-      parseJsonResponse<{
-        summary?: string;
-        momRows?: Partial<MoMRow>[];
-        actionItems?: Partial<ActionItem>[];
-      }>(finalText);
+      const parsed =
+        parseModelJson(
+          responseText
+        );
 
-    const momRows: MoMRow[] = (
-      parsed.momRows || []
-    ).map(
-      (
-        r: Partial<MoMRow>,
-        i: number
-      ) => ({
-        id: generateId(),
-        pointNumber: i + 1,
-        pointsDiscussed:
-          r.pointsDiscussed || "",
-        contactPerson:
-          r.contactPerson || "",
-        dependency:
-          r.dependency ||
-          "No Dependency",
-        priority: (
-          [
-            "High",
-            "Medium",
-            "Low",
-          ].includes(
-            r.priority as string
-          )
-            ? r.priority
-            : "Medium"
-        ) as MoMRow["priority"],
-        status: (
-          [
-            "Open",
-            "In Progress",
-            "Done",
-          ].includes(
-            r.status as string
-          )
-            ? r.status
-            : "Open"
-        ) as MoMRow["status"],
-      })
-    );
-
-    const actionItems: ActionItem[] =
-      (
-        parsed.actionItems || []
-      ).map(
-        (
-          a: Partial<ActionItem>
-        ) => ({
-          id: generateId(),
-          task: a.task || "",
-          owner: a.owner || "",
-          dueDate:
-            a.dueDate || "TBD",
-          done: false,
-        })
+      return NextResponse.json(
+        {
+          summary:
+            parsed.summary ||
+            "",
+        }
       );
+    }
 
-    return NextResponse.json({
-      summary:
-        parsed.summary || "",
-      momRows,
-      actionItems,
-    });
+    return NextResponse.json(
+      {
+        error:
+          "Invalid generate-mom mode",
+      },
+      {
+        status: 400,
+      }
+    );
   } catch (err) {
     console.error(
-      "Generate MoM error:",
+      "Generate MOM error:",
       err
     );
 
@@ -375,120 +424,14 @@ Rules:
         error:
           err instanceof Error
             ? err.message
-            : "Failed to generate MoM",
+            : "Failed to generate MOM",
       },
       {
-        status: 500,
+        status:
+          getErrorStatus(
+            err
+          ),
       }
     );
   }
-}
-
-function splitTranscript(
-  text: string,
-  maxChars: number
-): string[] {
-  const cleanText =
-    text.trim();
-
-  if (
-    cleanText.length <= maxChars
-  ) {
-    return [cleanText];
-  }
-
-  const chunks: string[] = [];
-  let remaining = cleanText;
-
-  while (
-    remaining.length > maxChars
-  ) {
-    let splitAt =
-      remaining.lastIndexOf(
-        "\n",
-        maxChars
-      );
-
-    if (
-      splitAt <
-      maxChars * 0.6
-    ) {
-      splitAt =
-        remaining.lastIndexOf(
-          ". ",
-          maxChars
-        );
-    }
-
-    if (
-      splitAt <
-      maxChars * 0.6
-    ) {
-      splitAt = maxChars;
-    }
-
-    const chunk =
-      remaining
-        .slice(0, splitAt)
-        .trim();
-
-    if (chunk) {
-      chunks.push(chunk);
-    }
-
-    remaining =
-      remaining
-        .slice(splitAt)
-        .trim();
-  }
-
-  if (remaining) {
-    chunks.push(remaining);
-  }
-
-  return chunks;
-}
-
-function parseJsonResponse<T>(
-  responseText: string
-): T {
-  const withoutThinking =
-    responseText.replace(
-      /<think>[\s\S]*?<\/think>/g,
-      ""
-    );
-
-  const start =
-    withoutThinking.indexOf("{");
-
-  const end =
-    withoutThinking.lastIndexOf(
-      "}"
-    );
-
-  if (
-    start === -1 ||
-    end === -1
-  ) {
-    throw new Error(
-      "No JSON object found in model response"
-    );
-  }
-
-  const jsonStr =
-    withoutThinking.slice(
-      start,
-      end + 1
-    );
-
-  return JSON.parse(jsonStr);
-}
-
-function sleep(
-  ms: number
-): Promise<void> {
-  return new Promise(
-    (resolve) =>
-      setTimeout(resolve, ms)
-  );
 }
